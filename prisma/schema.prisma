@@ -1,0 +1,272 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoleType {
+  ADMIN
+  ASSISTANT
+  SUPER_ADMIN
+}
+
+enum SubscriptionStatus {
+  PENDING
+  ACTIVE
+  FAIL
+}
+
+model Role {
+  id        Int      @id @default(autoincrement())
+  name      RoleType @unique
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("roles")
+}
+
+model Admin {
+  id                 Int            @id @default(autoincrement())
+  gmail              String         @unique
+  password           String
+  isVerified         Boolean        @default(false) @map("is_verified")
+  verificationCode   String?        @map("verification_code")
+  verificationExpiry DateTime?      @map("verification_expiry")
+  createdAt          DateTime       @default(now()) @map("created_at")
+  updatedAt          DateTime       @updatedAt @map("updated_at")
+  
+  // Связь 1:1 с ассистентом
+  assistant          Assistant?
+  
+  // Данные склада
+  items              Item[]
+  transactions       Transaction[]
+  pendingActions     PendingAction[]
+  
+  subscriptions      Subscription[]
+  sessions           Session[]      @relation("AdminSessions")
+
+  @@map("admins")
+}
+
+model Assistant {
+  id        Int      @id @default(autoincrement())
+  adminId   Int      @unique @map("admin_id") // UNIQUE! Связь 1:1
+  login     String   @unique
+  phone     String
+  password  String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  
+  admin            Admin           @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  sessions         Session[]       @relation("AssistantSessions")
+  pendingActions   PendingAction[]
+
+  @@map("assistants")
+}
+
+model SuperAdmin {
+  id        Int      @id @default(autoincrement())
+  phone     String   @unique
+  password  String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  
+  sessions  Session[] @relation("SuperAdminSessions")
+
+  @@map("super_admins")
+}
+
+model Subscription {
+  id         Int                @id @default(autoincrement())
+  adminId    Int                @map("admin_id")
+  startDate  DateTime           @map("start_date")
+  endDate    DateTime           @map("end_date")
+  status     SubscriptionStatus @default(PENDING)
+  price      Float
+  proofPhoto String             @map("proof_photo")
+  createdAt  DateTime           @default(now()) @map("created_at")
+  updatedAt  DateTime           @updatedAt @map("updated_at")
+  
+  admin      Admin              @relation(fields: [adminId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model Session {
+  id           String    @id @default(uuid())
+  adminId      Int?      @map("admin_id")
+  assistantId  Int?      @map("assistant_id")
+  superAdminId Int?      @map("super_admin_id")
+  refreshToken String    @unique @map("refresh_token")
+  expiresAt    DateTime  @map("expires_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  
+  admin        Admin?     @relation("AdminSessions", fields: [adminId], references: [id], onDelete: Cascade)
+  assistant    Assistant? @relation("AssistantSessions", fields: [assistantId], references: [id], onDelete: Cascade)
+  superAdmin   SuperAdmin? @relation("SuperAdminSessions", fields: [superAdminId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// ============================================
+// НОВЫЕ МОДЕЛИ ДЛЯ СКЛАДА
+// ============================================
+
+model Item {
+  id                  Int       @id @default(autoincrement())
+  adminId             Int       @map("admin_id")
+  
+  // Данные товара
+  name                String
+  code                String
+  warehouse           String
+  numberOfBoxes       Int       @default(1) @map("number_of_boxes")
+  boxSizeQuantities   String    @map("box_size_quantities") // JSON string
+  sizeType            String    @map("size_type")
+  itemType            String    @default("обувь") @map("item_type")
+  row                 String?
+  position            String?
+  side                String?
+  imageUrl            String?   @map("image_url")
+  totalQuantity       Int       @default(0) @map("total_quantity")
+  totalValue          Float     @default(0) @map("total_value")
+  qrCodeType          String    @default("none") @map("qr_code_type")
+  qrCodes             String?   @map("qr_codes")
+  
+  // Поля для синхронизации
+  version             Int       @default(1)
+  isDeleted           Boolean   @default(false) @map("is_deleted")
+  
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+  
+  admin               Admin             @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  pendingActions      PendingAction[]
+  
+  @@index([adminId])
+  @@index([adminId, isDeleted])
+  @@index([updatedAt])
+  @@map("items")
+}
+
+model Transaction {
+  id                  Int       @id @default(autoincrement())
+  adminId             Int       @map("admin_id")
+  itemId              Int?      @map("item_id")
+  
+  action              String
+  itemName            String    @map("item_name")
+  timestamp           BigInt
+  details             String?
+  
+  isDeleted           Boolean   @default(false) @map("is_deleted")
+  
+  createdAt           DateTime  @default(now()) @map("created_at")
+  
+  admin               Admin             @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  pendingActions      PendingAction[]
+  
+  @@index([adminId])
+  @@index([adminId, timestamp])
+  @@index([timestamp])
+  @@map("transactions")
+}
+
+// ============================================
+// СИСТЕМА ПОДТВЕРЖДЕНИЙ
+// ============================================
+
+enum PendingActionType {
+  UPDATE_ITEM
+  DELETE_ITEM
+  DELETE_TRANSACTION
+}
+
+enum PendingActionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+  CANCELLED
+}
+
+model PendingAction {
+  id                  Int                   @id @default(autoincrement())
+  adminId             Int                   @map("admin_id")
+  assistantId         Int                   @map("assistant_id")
+  actionType          PendingActionType     @map("action_type")
+  status              PendingActionStatus   @default(PENDING)
+  
+  itemId              Int?                  @map("item_id")
+  transactionId       Int?                  @map("transaction_id")
+  
+  oldData             String                @map("old_data")
+  newData             String                @map("new_data")
+  reason              String?
+  adminComment        String?               @map("admin_comment")
+  
+  notificationSent    Boolean               @default(false) @map("notification_sent")
+  notificationSentAt  DateTime?             @map("notification_sent_at")
+  
+  expiresAt           DateTime              @map("expires_at")
+  respondedAt         DateTime?             @map("responded_at")
+  createdAt           DateTime              @default(now()) @map("created_at")
+  updatedAt           DateTime              @updatedAt @map("updated_at")
+  
+  admin               Admin                 @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  assistant           Assistant             @relation(fields: [assistantId], references: [id], onDelete: Cascade)
+  item                Item?                 @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  transaction         Transaction?          @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+  
+  @@index([adminId, status])
+  @@index([assistantId, status])
+  @@index([status, expiresAt])
+  @@index([createdAt])
+  @@map("pending_actions")
+}
+
+// ============================================
+// PUSH-УВЕДОМЛЕНИЯ
+// ============================================
+
+model PushToken {
+  id                  Int       @id @default(autoincrement())
+  userId              Int       @map("user_id")
+  userType            String    @map("user_type")
+  token               String    @unique
+  deviceInfo          String?   @map("device_info")
+  isActive            Boolean   @default(true) @map("is_active")
+  
+  createdAt           DateTime  @default(now()) @map("created_at")
+  lastUsedAt          DateTime? @map("last_used_at")
+  
+  @@index([userId, userType, isActive])
+  @@map("push_tokens")
+}
+
+// ============================================
+// СОСТОЯНИЕ СИНХРОНИЗАЦИИ
+// ============================================
+
+model SyncState {
+  id                  Int       @id @default(autoincrement())
+  userId              Int       @map("user_id")
+  userType            String    @map("user_type")
+  deviceId            String    @map("device_id")
+  
+  lastSyncAt          DateTime  @map("last_sync_at")
+  lastItemVersion     Int       @default(0) @map("last_item_version")
+  lastTransactionId   Int       @default(0) @map("last_transaction_id")
+  lastPendingActionId Int       @default(0) @map("last_pending_action_id")
+  
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+  
+  @@unique([userId, userType, deviceId])
+  @@index([userId, userType])
+  @@map("sync_states")
+}
