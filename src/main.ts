@@ -46,10 +46,28 @@ async function bootstrap() {
   SwaggerModule.setup('api', app, document);
 
   const port = process.env.PORT || 3000;
-  await app.listen(port);
-  
+  const host = process.env.HOST || '0.0.0.0'; // Listen on all network interfaces
+
+  await app.listen(port, host);
+
   console.log(`🚀 Application is running on: http://localhost:${port}`);
+  console.log(`🌐 Network access: http://${getLocalIp()}:${port}`);
   console.log(`📚 Swagger documentation: http://localhost:${port}/api`);
+}
+
+function getLocalIp(): string {
+  const { networkInterfaces } = require('os');
+  const nets = networkInterfaces();
+
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      // Skip internal (i.e. 127.0.0.1) and non-IPv4 addresses
+      if (net.family === 'IPv4' && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return 'localhost';
 }
 
 bootstrap();
